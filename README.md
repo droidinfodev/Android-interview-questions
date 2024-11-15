@@ -871,19 +871,672 @@ Room provides a solid and flexible migration system to handle complex schema cha
 
 ### 8. **What are `DataSources` in the context of `Room`, and how do they fit into the overall architecture?**
 
-   *Look for an understanding of `LiveData`, `PagingData`, and how `DataSource` objects are used for paging and observing data.*
+   In the context of **Room** (an Android persistence library), **DataSource** objects play an important role in managing data loading and pagination. They provide a way to interact with your database by offering a clean and efficient way to observe, load, and paginate data.
+
+### Key Concepts in Room:
+
+1. **LiveData**
+2. **PagingData**
+3. **DataSource (specifically for Paging)**
+
+Let’s break these down in the context of Room:
+
+### 1. **LiveData**: Reactive Data Observation
+**LiveData** is an observable data holder class that is lifecycle-aware. It is used to automatically update the UI when the underlying data changes, without the need for manual intervention (such as refreshing the UI when the data is updated).
+
+- **Room + LiveData**: When using Room with LiveData, queries return a **LiveData** object that contains the data from the database. Any changes to the underlying data will automatically trigger updates to the UI, ensuring the UI is always in sync with the data.
+
+#### Example of LiveData with Room:
+
+```kotlin
+@Entity(tableName = "users")
+data class User(
+    @PrimaryKey val id: Int,
+    val name: String,
+    val age: Int
+)
+
+@Dao
+interface UserDao {
+    @Query("SELECT * FROM users")
+    fun getAllUsers(): LiveData<List<User>> // LiveData will observe changes
+}
+```
+
+In this example, `getAllUsers()` returns a `LiveData<List<User>>`. Whenever the data in the `users` table changes, the `LiveData` will emit a new list, and the UI can observe it and automatically update.
+
+### 2. **PagingData**: Efficiently Paginating Data
+**Paging** allows you to efficiently load large datasets in chunks, or "pages", rather than loading the entire dataset at once. This helps to prevent memory overload and improve performance when displaying large lists, such as in a RecyclerView.
+
+Room supports **Paging** via **PagingData**, which is part of Android's Paging library. PagingData is a wrapper around data that can be used with RecyclerView to manage data in chunks. The Paging library fetches data from the database in a way that is seamless and efficient, making it ideal for use cases where you need to load large lists, such as with endless scrolling.
+
+### 3. **DataSource**: A Source of Data for Paging
+In Room, a **DataSource** is a way to abstract the process of loading data from a database and providing it in a paginated way. Room provides two types of DataSource classes:
+- **PagedList.DataSource** (deprecated in favor of `PagingSource` with Paging 3)
+- **PagingSource** (used with Paging 3, the new Paging library)
+
+#### DataSource Types in Room:
+- **PagingSource**: A `PagingSource` is used to load data in a paginated fashion. It is the recommended way to implement paging in modern Room applications, especially with the new **Paging 3** library.
+
+A `PagingSource` is a class that provides data in chunks for paging. It is used in Room to query the database in pages. You pass a `PagingSource` to a `Pager` that will handle the loading of the pages.
+
+- **LiveData + PagingData**: `PagingData` is returned as a type that can be observed using `LiveData`. This is commonly used with **Paging 3** to load data from the database and observe it reactively.
+
+#### Example of PagingSource with Room:
+
+```kotlin
+@Entity(tableName = "users")
+data class User(
+    @PrimaryKey val id: Int,
+    val name: String,
+    val age: Int
+)
+
+@Dao
+interface UserDao {
+    @Query("SELECT * FROM users ORDER BY name ASC")
+    fun getAllUsers(): PagingSource<Int, User> // PagingSource for pagination
+}
+```
+
+In this example:
+- The `getAllUsers()` method returns a `PagingSource<Int, User>`, where `Int` represents the key type (usually the page number or offset) and `User` is the data type.
+- `PagingSource` is used to query the database, with the paging library managing the loading of data in chunks.
+
+### 4. **How Paging and LiveData Work Together**
+
+Room’s integration with **Paging 3** and **LiveData** works seamlessly for efficient data loading and observation. The process can be broken down into the following steps:
+
+1. **PagingSource**: The `PagingSource` is a class responsible for loading data in pages from the database. It abstracts the data source and allows the paging library to load chunks of data efficiently.
+   
+2. **PagingData**: The result of a `PagingSource` is wrapped in a `PagingData` object. `PagingData` represents a page of data and contains the logic to handle pagination.
+   
+3. **LiveData**: Once you wrap a `PagingData` with LiveData, you can observe the `LiveData<PagingData<User>>`. As the data loads or changes, the observer will be notified and can update the UI.
+
+### Putting It All Together:
+```kotlin
+// Define the PagingSource
+@Dao
+interface UserDao {
+    @Query("SELECT * FROM users ORDER BY name ASC")
+    fun getAllUsers(): PagingSource<Int, User> // PagingSource for pagination
+}
+
+// ViewModel to manage the UI-related data
+class UserViewModel(application: Application) : AndroidViewModel(application) {
+    private val userDao: UserDao = UserDatabase.getDatabase(application).userDao()
+
+    // Use Pager to create a LiveData<PagingData<User>> for observation
+    val users: LiveData<PagingData<User>> = Pager(
+        config = PagingConfig(
+            pageSize = 20, // Number of items to load per page
+            enablePlaceholders = false
+        ),
+        pagingSourceFactory = { userDao.getAllUsers() }
+    ).liveData
+}
+
+// In the Activity or Fragment, observe the LiveData
+class UserListActivity : AppCompatActivity() {
+    private lateinit var userViewModel: UserViewModel
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_user_list)
+
+        val adapter = UserAdapter()
+
+        // Setup the ViewModel
+        userViewModel = ViewModelProvider(this).get(UserViewModel::class.java)
+
+        // Observe the LiveData<PagingData<User>>
+        userViewModel.users.observe(this, Observer { pagingData ->
+            adapter.submitData(lifecycle, pagingData)
+        })
+
+        // Setup the RecyclerView with PagingDataAdapter
+        val recyclerView: RecyclerView = findViewById(R.id.recyclerView)
+        recyclerView.layoutManager = LinearLayoutManager(this)
+        recyclerView.adapter = adapter
+    }
+}
+```
+
+### Explanation of the Code:
+- **UserDao**: The `getAllUsers()` method returns a `PagingSource<Int, User>`. This allows Room to query the database in chunks of users.
+- **ViewModel**: The `Pager` creates a `LiveData<PagingData<User>>` that can be observed. This data is automatically loaded in pages as the user scrolls through the RecyclerView.
+- **Activity/Fragment**: The `LiveData` is observed, and when new data is loaded, it is automatically passed to the `PagingDataAdapter` to display the paginated data in the RecyclerView.
+
+### Conclusion:
+
+- **DataSource** in Room refers to objects like `PagingSource` that manage loading paginated data.
+- **LiveData** is used to observe data reactively in the UI, so when the underlying data changes, the UI gets updated automatically.
+- **PagingData** is a wrapper for data in the Paging 3 library, and it works seamlessly with `LiveData` to observe and display large datasets in chunks.
+  
+By combining `LiveData`, `PagingSource`, and `PagingData`, Room provides an efficient way to manage large datasets in your Android applications, offering automatic updates and smooth user experiences when working with paginated data.
 
 ### 9. **Explain the concept of `Repository` pattern in Android Architecture Components. How does it interact with `ViewModel` and `DAO`?**
 
-   *Expect a description of how the `Repository` abstracts data sources and interacts with `ViewModel` and `DAO` for data operations.*
+   The **Repository** pattern is a core architectural pattern in Android development, especially when working with **Android Architecture Components** like **ViewModel**, **Room**, and **LiveData**. It serves as an abstraction layer between the data sources (such as local databases, remote APIs, or cache) and the rest of the application, making it easier to manage and access data in a unified way.
+
+### Purpose of the Repository Pattern
+
+- **Data Abstraction**: The Repository provides a clean API for data access, abstracting the underlying data sources (Room DAO, network APIs, etc.).
+- **Separation of Concerns**: It helps separate data management logic from UI-related code in the `ViewModel`, allowing for better testability and maintainability.
+- **Centralized Data Handling**: The Repository handles all the data-related logic, including data fetching, caching, and synchronization between local and remote data sources.
+
+### Components Interacting in the Repository Pattern:
+
+1. **ViewModel**
+2. **Repository**
+3. **DAO (Data Access Object)**
+
+Let’s break down how each of these components works together:
+
+### 1. **ViewModel**
+- The **ViewModel** is responsible for preparing and managing UI-related data in a lifecycle-conscious way. It interacts with the Repository to fetch data and expose it to the UI (Activity/Fragment).
+- The **ViewModel** does **not** directly access the database or make network requests; instead, it delegates these tasks to the **Repository**. It also exposes the data in the form of `LiveData` or `State` objects, which can be observed by the UI to update the view reactively.
+  
+### 2. **Repository**
+- The **Repository** acts as the intermediary between the **ViewModel** and the underlying data sources like **Room DAO** (local database) or remote APIs (for network data). It abstracts the data sources and provides a clean API for data operations.
+  
+- **Responsibilities of the Repository**:
+  - Fetch data from **Room DAO** (local database) or remote sources (like a web API).
+  - Perform any necessary transformations, caching, or synchronization logic.
+  - Provide the data in a form that the **ViewModel** can easily observe (usually using `LiveData` or `Flow`).
+  
+  The Repository is responsible for deciding where to get the data (e.g., network vs. local database), ensuring that the **ViewModel** gets the data it needs without having to know where it came from.
+
+### 3. **DAO (Data Access Object)**
+- The **DAO** is the interface that provides access to the local database (Room in this case). It defines the methods for querying, inserting, updating, and deleting data in the database.
+- The **Repository** interacts with the DAO to fetch or modify data in the database. It encapsulates database operations like database queries, inserts, and updates, ensuring that the **ViewModel** doesn’t need to know the details of database operations.
+
+### Interaction between ViewModel, Repository, and DAO
+
+1. **ViewModel** calls methods in the **Repository** to get or send data.
+2. The **Repository** abstracts the logic of whether the data should come from the local database (via **DAO**) or a remote API. It then fetches the data accordingly.
+3. The **Repository** either:
+   - Fetches data from **Room** via the **DAO** (if it's a local data source).
+   - Fetches data from a **network API** (if remote data is required).
+4. Once the **Repository** obtains the data, it returns it to the **ViewModel** in the form of `LiveData` or `Flow` so that the UI can observe changes.
+
+### Example of Repository Pattern with Room:
+
+Let’s look at a simple example where a **Repository** interacts with a **ViewModel** and a **DAO** (Room):
+
+#### 1. **Entity and DAO**
+
+```kotlin
+@Entity(tableName = "user")
+data class User(
+    @PrimaryKey val id: Int,
+    val name: String
+)
+
+@Dao
+interface UserDao {
+    @Query("SELECT * FROM user WHERE id = :id")
+    fun getUserById(id: Int): LiveData<User>
+
+    @Insert
+    suspend fun insert(user: User)
+
+    @Delete
+    suspend fun delete(user: User)
+}
+```
+
+#### 2. **Repository**
+
+```kotlin
+class UserRepository(private val userDao: UserDao, private val apiService: ApiService) {
+
+    // Fetch user from the local database (Room)
+    fun getUser(id: Int): LiveData<User> {
+        return userDao.getUserById(id) // Get LiveData from DAO
+    }
+
+    // Fetch data from a remote API
+    suspend fun fetchUserFromApi(id: Int): User {
+        return apiService.getUser(id) // Fetch from API
+    }
+
+    // Insert user into the database
+    suspend fun insertUser(user: User) {
+        userDao.insert(user)
+    }
+}
+```
+
+#### 3. **ViewModel**
+
+```kotlin
+class UserViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val userDao = UserDatabase.getDatabase(application).userDao()
+    private val apiService = ApiService.create() // Assume this is a Retrofit service
+    private val userRepository = UserRepository(userDao, apiService)
+
+    // Expose LiveData from the repository to the UI
+    fun getUser(id: Int): LiveData<User> {
+        return userRepository.getUser(id)
+    }
+
+    // Fetch user data from the API and save to the database
+    fun fetchAndSaveUser(id: Int) {
+        viewModelScope.launch {
+            val user = userRepository.fetchUserFromApi(id)
+            userRepository.insertUser(user)
+        }
+    }
+}
+```
+
+#### 4. **Activity/Fragment (UI Layer)**
+
+```kotlin
+class UserActivity : AppCompatActivity() {
+
+    private lateinit var userViewModel: UserViewModel
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_user)
+
+        userViewModel = ViewModelProvider(this).get(UserViewModel::class.java)
+
+        // Observe the LiveData for changes
+        userViewModel.getUser(1).observe(this, Observer { user ->
+            // Update the UI with the user data
+            println("User: ${user.name}")
+        })
+
+        // Fetch user from API and insert it into the database
+        userViewModel.fetchAndSaveUser(1)
+    }
+}
+```
+
+### How the Repository Interacts:
+- The **ViewModel** asks the **Repository** for the `LiveData<User>` (via `getUser()`). This keeps the ViewModel agnostic of the data source and simply observes the data.
+- The **Repository** provides data from the **DAO** (local database) if available. If not, it might fetch data from a remote API (`fetchUserFromApi`), store it locally, and then update the data source.
+- The **DAO** provides the actual implementation of data operations, and **Room** manages the database access for you.
+
+### Benefits of the Repository Pattern:
+
+1. **Decoupling**: The UI (ViewModel) does not need to know whether the data comes from a local database or a remote server. This makes the code easier to maintain and test.
+2. **Centralized Data Logic**: The Repository contains all data-related logic, which can be centralized and reused across multiple parts of the app.
+3. **Separation of Concerns**: The ViewModel is responsible only for managing UI-related data, and the DAO handles database operations, leaving the Repository to bridge the two.
+4. **Testability**: The Repository can be easily mocked in unit tests, allowing for better testing of the ViewModel and UI without needing access to the actual database or network.
+
+### Conclusion:
+The **Repository** pattern plays a crucial role in Android’s architecture by abstracting data access logic from the **ViewModel** and **DAO**. It interacts with the **ViewModel** to provide data in a clean, lifecycle-aware manner (using `LiveData` or `Flow`) and delegates database or network operations to the **DAO**. This separation of concerns improves maintainability, testability, and scalability of the application.
 
 ### 10. **What is the difference between `MutableLiveData` and `LiveData`? When would you use each?**
 
-   *Candidates should explain how `MutableLiveData` is a mutable variant of `LiveData` and is used within `ViewModel` or `Repository`.*
+   In Android, **LiveData** and **MutableLiveData** are key components of the **Android Architecture Components** used for managing UI-related data in a lifecycle-aware manner. They are both used to hold and manage data that can be observed by the UI (typically an Activity or Fragment), but there are important differences between them in terms of mutability and where they are used.
+
+### 1. **LiveData**:
+- **LiveData** is an **immutable** class, which means once a `LiveData` object is created, its value cannot be changed directly from outside the class.
+- **LiveData** is typically exposed to the UI layer (Activity or Fragment) because the UI should **observe** data but should not directly modify it.
+- The **UI** layer (or any observer) can **observe** changes to the `LiveData` object, and it will automatically update the UI when the data changes. However, it cannot modify the data.
+
+#### Key Characteristics:
+- **Immutable**: Once a `LiveData` is created, its value cannot be updated directly from outside.
+- **Read-only**: UI components can only observe the data, but they cannot change it.
+- **Lifecycle-aware**: `LiveData` automatically manages lifecycle changes, ensuring that observers are only notified when the associated `Activity` or `Fragment` is in an active state.
+
+#### Example:
+
+```kotlin
+class UserViewModel : ViewModel() {
+    // Exposing LiveData to the UI (Activity or Fragment)
+    private val _user = MutableLiveData<User>()
+    
+    val user: LiveData<User> = _user // The UI will observe this LiveData
+}
+```
+
+In this case, the `LiveData<User>` is exposed to the UI, ensuring the UI can observe changes but cannot directly modify the `user` object.
+
+### 2. **MutableLiveData**:
+- **MutableLiveData** is a **subclass of LiveData** that provides **mutability** (i.e., the ability to change the value). 
+- It allows for **setting the value** of the data and is often used internally within the **ViewModel** or **Repository** to modify the data.
+- While `LiveData` is used for observation (to prevent changes to the data from the outside), `MutableLiveData` is used where data needs to be updated.
+
+#### Key Characteristics:
+- **Mutable**: The value of `MutableLiveData` can be changed using methods like `setValue()` or `postValue()`.
+- **Internal use**: `MutableLiveData` is typically used inside the **ViewModel** or **Repository** to modify the data. However, it is **not directly exposed to the UI layer**. Instead, only an immutable `LiveData` reference is exposed to the UI to ensure that UI cannot modify the data.
+  
+#### Example:
+
+```kotlin
+class UserViewModel : ViewModel() {
+    // MutableLiveData used to change the user data internally
+    private val _user = MutableLiveData<User>()
+
+    // Public LiveData to observe the changes
+    val user: LiveData<User> = _user
+
+    // Method to update the user data
+    fun setUser(user: User) {
+        _user.value = user // Setting value of MutableLiveData
+    }
+
+    // Alternative: Post value on background thread
+    fun setUserInBackground(user: User) {
+        _user.postValue(user) // This can be called from background thread
+    }
+}
+```
+
+### Key Differences:
+
+| **Feature**               | **LiveData**                        | **MutableLiveData**                  |
+|---------------------------|-------------------------------------|--------------------------------------|
+| **Mutability**             | Immutable (cannot modify its value directly) | Mutable (can modify its value directly) |
+| **Use Case**               | Exposed to UI to observe data. The UI cannot modify it. | Used inside ViewModel/Repository to update data. |
+| **Methods for Setting Data** | Cannot set value directly | `setValue()` (for UI thread), `postValue()` (for background thread) |
+| **Visibility**             | Typically exposed to the UI (as `LiveData`) | Usually private within ViewModel/Repository to modify the data. |
+| **Thread Safety**          | Not thread-safe for setting value (can only be set from the main thread) | `postValue()` is thread-safe and can be called from background threads. |
+
+### When to Use Each:
+
+1. **Use `LiveData` when**:
+   - You want to **expose the data to the UI** in an immutable form.
+   - The UI layer (Activity or Fragment) should only **observe the data** but **not modify** it.
+   - You need to ensure that the data is lifecycle-aware and that updates happen only when the UI is in an active state.
+   
+   **Example**: In a `ViewModel`, expose `LiveData` so that the UI can observe the data without being able to change it:
+   
+   ```kotlin
+   val user: LiveData<User> = _user  // Only expose LiveData to the UI
+   ```
+
+2. **Use `MutableLiveData` when**:
+   - You need to **modify the data** inside your `ViewModel` or `Repository`.
+   - You want to **set the value of the data** internally (e.g., based on network responses or database queries).
+   - You need to update the data on a background thread and make the updates visible to the UI (use `postValue()` in this case).
+   
+   **Example**: In a `ViewModel`, use `MutableLiveData` internally and expose it as `LiveData` to the UI layer:
+   
+   ```kotlin
+   private val _user = MutableLiveData<User>()
+   val user: LiveData<User> = _user  // Expose as LiveData to the UI
+   ```
+
+### Practical Example in an App:
+
+Imagine you are developing a `UserProfileActivity` that shows user details. The `ViewModel` will interact with the `Repository` to get the user data and expose it to the UI.
+
+```kotlin
+class UserProfileViewModel : ViewModel() {
+    private val userRepository = UserRepository() // Assume this interacts with a Room DAO or API
+
+    // MutableLiveData for internal modification
+    private val _userProfile = MutableLiveData<UserProfile>()
+    
+    // Public LiveData exposed to the UI (immutable)
+    val userProfile: LiveData<UserProfile> = _userProfile
+
+    // Function to load user profile from the repository
+    fun loadUserProfile(userId: Int) {
+        viewModelScope.launch {
+            val profile = userRepository.getUserProfile(userId) // Assume this fetches data from a database or network
+            _userProfile.value = profile // Modify data internally
+        }
+    }
+}
+```
+
+In the `Activity` or `Fragment`:
+
+```kotlin
+class UserProfileActivity : AppCompatActivity() {
+
+    private lateinit var viewModel: UserProfileViewModel
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_user_profile)
+
+        // Initialize the ViewModel
+        viewModel = ViewModelProvider(this).get(UserProfileViewModel::class.java)
+
+        // Observe the LiveData from the ViewModel
+        viewModel.userProfile.observe(this, Observer { userProfile ->
+            // Update the UI with the user profile data
+            displayUserProfile(userProfile)
+        })
+
+        // Trigger the data load
+        viewModel.loadUserProfile(123)
+    }
+}
+```
+
+### Conclusion:
+- **`LiveData`** is an **immutable** data holder, meant for exposing data to the UI. The UI can observe but **not modify** the data.
+- **`MutableLiveData`** is a **mutable** variant of `LiveData` used to modify the data inside the `ViewModel` or `Repository`. It should not be directly exposed to the UI; only its `LiveData` counterpart should be exposed to ensure that the data cannot be modified by the UI layer.
+  
+This separation of concerns helps ensure that the UI can react to changes in data but cannot tamper with or change the state directly, leading to more predictable and maintainable code.
 
 ### 11. **How do you implement a `Room` database with a one-to-many or many-to-many relationship?**
 
-   *Expect a detailed answer on defining entities, relations, and using `@Relation` annotations for relationships.*
+   In **Room** (the persistence library for Android), managing relationships between entities such as **one-to-many** and **many-to-many** is a common use case. Room provides a way to define relationships between entities using annotations like `@Relation` and helper entities like **junction tables**. Here, I'll walk you through implementing a `Room` database with both **one-to-many** and **many-to-many** relationships.
+
+### 1. **One-to-Many Relationship**
+In a **one-to-many** relationship, one entity (the parent) is associated with multiple instances of another entity (the child).
+
+#### Example:
+Let’s consider a **User** and **Post** relationship:
+- A **User** can have many **Posts**.
+- Each **Post** belongs to exactly one **User**.
+
+#### Step 1: Define the Entities
+
+**User Entity**:
+```kotlin
+@Entity(tableName = "users")
+data class User(
+    @PrimaryKey(autoGenerate = true) val userId: Long,
+    val name: String
+)
+```
+
+**Post Entity**:
+```kotlin
+@Entity(tableName = "posts")
+data class Post(
+    @PrimaryKey(autoGenerate = true) val postId: Long,
+    val userId: Long, // Foreign key to User
+    val title: String,
+    val content: String
+)
+```
+
+#### Step 2: Define the `@Relation` in a Data Class
+In a **one-to-many** relationship, we will define a **wrapper class** that contains a `User` object and a list of `Post` objects. This wrapper class uses the `@Relation` annotation to specify the relationship.
+
+```kotlin
+data class UserWithPosts(
+    @Embedded val user: User, // Embedded User entity
+    @Relation(
+        parentColumn = "userId",  // Corresponding column in the User entity
+        entityColumn = "userId"   // Corresponding column in the Post entity
+    )
+    val posts: List<Post> // The list of posts related to the user
+)
+```
+
+Here:
+- `@Embedded` tells Room to include the fields from the `User` entity in this class.
+- `@Relation` tells Room to fetch the associated `Post` entities based on the `userId`.
+
+#### Step 3: Define the DAO
+The `Dao` will include a method to fetch a `User` along with their associated `Posts`:
+
+```kotlin
+@Dao
+interface UserDao {
+    // Get a user with their posts
+    @Transaction
+    @Query("SELECT * FROM users WHERE userId = :userId")
+    suspend fun getUserWithPosts(userId: Long): UserWithPosts
+
+    // Insert a user
+    @Insert
+    suspend fun insertUser(user: User)
+
+    // Insert a post
+    @Insert
+    suspend fun insertPost(post: Post)
+}
+```
+
+In the DAO:
+- The `@Transaction` annotation ensures that the query to fetch the `UserWithPosts` and the related `Posts` happens in a single transaction.
+- `@Query` is used to fetch a `User` with their associated `Posts`.
+
+#### Step 4: Database
+Finally, define the database class:
+
+```kotlin
+@Database(entities = [User::class, Post::class], version = 1)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun userDao(): UserDao
+}
+```
+
+### 2. **Many-to-Many Relationship**
+In a **many-to-many** relationship, multiple instances of one entity can be associated with multiple instances of another entity. For example:
+- A **Student** can enroll in many **Courses**.
+- A **Course** can have many **Students** enrolled.
+
+#### Step 1: Define the Entities
+
+**Student Entity**:
+```kotlin
+@Entity(tableName = "students")
+data class Student(
+    @PrimaryKey(autoGenerate = true) val studentId: Long,
+    val name: String
+)
+```
+
+**Course Entity**:
+```kotlin
+@Entity(tableName = "courses")
+data class Course(
+    @PrimaryKey(autoGenerate = true) val courseId: Long,
+    val courseName: String
+)
+```
+
+#### Step 2: Define the Junction Table (Intermediate Table)
+To model a **many-to-many** relationship in Room, we need a **junction table** that represents the relationship between the two entities. This table does not have its own entity class but will be represented as a **data class**.
+
+```kotlin
+@Entity(
+    primaryKeys = ["studentId", "courseId"], // Composite primary key
+    foreignKeys = [
+        ForeignKey(
+            entity = Student::class,
+            parentColumns = ["studentId"],
+            childColumns = ["studentId"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = Course::class,
+            parentColumns = ["courseId"],
+            childColumns = ["courseId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ]
+)
+data class Enrollment(
+    val studentId: Long,
+    val courseId: Long
+)
+```
+
+In this table:
+- The `Enrollment` table represents the **many-to-many** relationship between `Student` and `Course`.
+- It uses a **composite primary key** made up of `studentId` and `courseId`.
+- **Foreign keys** reference the `Student` and `Course` entities.
+
+#### Step 3: Define the `@Relation` in a Data Class
+For the **many-to-many** relationship, you need to define a data class that maps the relationship between `Student` and `Course`. This class will have two `@Relation` annotations, one for each side of the relationship.
+
+```kotlin
+data class StudentWithCourses(
+    @Embedded val student: Student,
+    @Relation(
+        parentColumn = "studentId",
+        entityColumn = "courseId",
+        associateBy = Junction(Enrollment::class)
+    )
+    val courses: List<Course>
+)
+```
+
+In this class:
+- `@Relation` defines the relationship between `Student` and `Course` via the `Enrollment` junction table.
+- `@Junction` tells Room that `Enrollment` is the intermediary table for the many-to-many relationship.
+
+#### Step 4: Define the DAO
+In the `DAO`, you need methods for inserting data into the `Enrollment` table and for querying data about students and their courses.
+
+```kotlin
+@Dao
+interface SchoolDao {
+    // Get student with their enrolled courses
+    @Transaction
+    @Query("SELECT * FROM students WHERE studentId = :studentId")
+    suspend fun getStudentWithCourses(studentId: Long): StudentWithCourses
+
+    // Insert student
+    @Insert
+    suspend fun insertStudent(student: Student)
+
+    // Insert course
+    @Insert
+    suspend fun insertCourse(course: Course)
+
+    // Enroll student in a course (insert into the Enrollment table)
+    @Insert
+    suspend fun enrollStudentInCourse(enrollment: Enrollment)
+}
+```
+
+#### Step 5: Database
+Define the database class that includes the entities and DAO:
+
+```kotlin
+@Database(entities = [Student::class, Course::class, Enrollment::class], version = 1)
+abstract class SchoolDatabase : RoomDatabase() {
+    abstract fun schoolDao(): SchoolDao
+}
+```
+
+### 3. **Summary of Relationships**
+
+- **One-to-Many**:
+  - One `User` has many `Posts`.
+  - `@Relation` is used in a wrapper class to combine the `User` and the list of `Post` objects.
+  - The foreign key is stored in the `Post` table.
+  
+- **Many-to-Many**:
+  - A `Student` can enroll in many `Courses`, and a `Course` can have many `Students`.
+  - A junction table (`Enrollment`) is used to model the many-to-many relationship.
+  - `@Relation` with `@Junction` is used in a wrapper class to join the `Student` and `Course` entities through the `Enrollment` table.
+
+### 4. **Final Notes**:
+- **Foreign Keys** in the junction table are crucial in maintaining data integrity.
+- **@Transaction** ensures that the operations, like fetching data or inserting, happen atomically and safely.
+- Using **@Relation** simplifies querying related data by combining the results of multiple tables into a single object, reducing the need for manual joins.
+
+This setup allows Room to manage relationships between entities easily, ensuring that you can work with complex data models while keeping your code clean and maintainable.
 
 ### 12. **What are `WorkManager`, `JobScheduler`, and `AlarmManager`? How do they differ, and when would you use each?**
 
